@@ -1,7 +1,7 @@
 schema: spec-driven
 
 context: |
-  VS Code extension providing a Fork-style (git-fork.com) graphical Git client inside the editor.
+  GitGrove: VS Code extension providing a Fork-style (git-fork.com) graphical Git client inside the editor.
   Learning project: every design.md must explain the VS Code APIs used and why, plus performance trade-offs.
   Performance is a hard requirement: lazy activation, no blocking the extension host, streaming git output, cancellation, paginated/virtualized lists.
   Must work on macOS, Windows and Linux. Git access via the git CLI (args arrays, never shell strings).

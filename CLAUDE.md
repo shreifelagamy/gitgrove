@@ -1,9 +1,13 @@
-# Git Studio — VS Code extension
+# GitGrove — VS Code extension
 
 A VS Code extension that gives a full graphical Git client inside the editor, modeled on the
 workflow and UX of the Fork desktop app (https://git-fork.com): commit graph, staging with
 hunk/line selection, branches/tags/remotes/stashes sidebar, interactive rebase, merge-conflict
 resolution, blame and file history.
+
+Name: **GitGrove** (extension id `<publisher>.gitgrove`). Checked free on the VS Code Marketplace
+and Open VSX on 2026-11-26. Related existing extensions to stay distinct from: GitLens, Git Graph,
+GitStudio (`gitstudio.gitstudio`), Grove SCM.
 
 "Inspired by Fork" means matching its layout, interactions and actions. Do not copy Fork's name,
 logo, icons, or other bundled assets; use VS Code codicons and our own styling.
