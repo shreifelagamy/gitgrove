@@ -25,6 +25,13 @@ extension, step by step.
   "webview messaging"). Each step ends in something runnable (F5 Extension Development Host).
 - Keep explanations in chat; keep durable decisions in OpenSpec `design.md` files.
 
+## Git commits and PRs
+
+- **No AI attribution anywhere.** Never add `Co-Authored-By` lines for Claude or any AI agent,
+  "Generated with Claude Code" footers, or any mention of AI tools in commit messages, PR titles,
+  PR descriptions, or code comments. Commits are authored by the repo owner only.
+- Conventional commit style: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`.
+
 ## Spec-driven workflow (OpenSpec)
 
 - `openspec/specs/` — current truth: one spec per capability.

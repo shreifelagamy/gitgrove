@@ -25,6 +25,10 @@ Specs and design decisions live in [`openspec/`](openspec/) (spec-driven develop
 
 Build instructions will be added once the project is scaffolded (M0).
 
+## License
+
+[MIT](LICENSE) © Shreif Ashraf. Third-party content below keeps its own license.
+
 ## Third-party content
 
 `.claude/skills/vscode-extension-guide` is © aktsmm, licensed CC BY-NC-SA 4.0 (see its
