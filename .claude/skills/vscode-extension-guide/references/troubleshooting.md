@@ -1,0 +1,196 @@
+# Troubleshooting
+
+Common issues and solutions for VS Code extension development.
+
+## Installation Versus Navigation
+
+- Clarify what is missing: the browser's Install handoff, the Extensions search result, the installed extension, or an Activity Bar icon. These are separate paths; an installed extension need not contribute a sidebar.
+- For a browser handoff, compare the registered `vscode:` handler and the process that received `--open-url` with the intended VS Code executable/profile. Multiple installed, portable or test builds can route to a different window. Do not close shared windows or change associations without approval.
+- For an empty `@id:<publisher>.<name>` result, compare the public gallery's exact-ID response, engine/platform compatibility and the running build's gallery/resource endpoints. A working public page or one CDN's 404 does not establish the search failure's cause without matching request/log evidence.
+- With installation approval, use the intended build's CLI to install the extension ID, then confirm that exact ID/version using its `--list-extensions --show-versions` and the same profile. A successful CLI install proves that route, not that search or the browser handoff was repaired. Never trigger real extension tasks merely to test installation.
+- For a missing Activity Bar icon, inspect view-container contributions, packaged SVG and saved view placement; see [TreeView](treeview.md). Avoid reinstalling or resetting unrelated UI when the entry point was never contributed.
+
+## Extension Not Loading
+
+| Symptom                     | Cause                                       | Solution                                                                                                                                                                             |
+| --------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Extension never activates   | Wrong `main` path or `engines.vscode` floor | Since VS Code 1.74, contributed commands/views/languages activate implicitly; add `activationEvents` only for other triggers (for example `onStartupFinished`, `workspaceContains:`) |
+| "Extension is not active"   | Wrong activation trigger                    | Avoid `"*"`; use the narrowest event that covers the entry point                                                                                                                     |
+| Works in dev, not installed | Build output not included                   | Check `.vscodeignore`, ensure `out/` is included                                                                                                                                     |
+
+### Debug Activation
+
+```typescript
+// Add at top of activate() while debugging, or route this through your logger.
+const output = vscode.window.createOutputChannel("My Extension");
+output.appendLine("Extension activating...");
+output.show(true);
+```
+
+Prefer Output Channel logs for extension diagnostics. Use **Help** → **Toggle Developer Tools** → **Console** only for temporary investigation or webview/runtime errors that are not reaching your logger.
+
+## Command Not Found
+
+| Symptom                   | Cause                        | Solution                                                                                                        |
+| ------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| "command not found"       | ID mismatch                  | Ensure same ID in package.json and registerCommand()                                                            |
+| Command not in palette    | Missing contributes.commands | Add command definition to package.json                                                                          |
+| Command defined but fails | Extension not activated      | On `engines.vscode` < 1.74, add `onCommand:<id>`; otherwise check `activate()` errors in the Extension Host log |
+
+### Verify Command Registration
+
+```typescript
+// In activate()
+const output = vscode.window.createOutputChannel("My Extension");
+const commands = await vscode.commands.getCommands();
+output.appendLine(
+  `Registered: ${commands.filter((c) => c.includes("myExt")).join(", ")}`,
+);
+```
+
+## Keyboard Shortcuts Not Working
+
+| Symptom               | Cause                             | Solution                           |
+| --------------------- | --------------------------------- | ---------------------------------- |
+| Shortcut does nothing | `when` clause too restrictive     | Remove or broaden `when` condition |
+| Works sometimes       | Context-dependent `when`          | Check active editor, focus state   |
+| Conflict with other   | Another extension/VS Code uses it | Use unique key combination         |
+
+### Check for Conflicts
+
+1. **Ctrl+K Ctrl+S** → Open Keyboard Shortcuts
+2. Search for your key combination
+3. Look for conflicts (multiple entries)
+
+### Common `when` Issues
+
+```json
+// ❌ Doesn't work in editor
+"when": "!inputFocus"
+
+// ✅ Works everywhere
+"when": ""  // or omit entirely
+
+// ✅ Only in editor with text focus
+"when": "editorTextFocus"
+```
+
+## Packaging Issues
+
+| Symptom                                                          | Cause                                               | Solution                                                                                                |
+| ---------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| VSIX too large (100MB+)                                          | `node_modules` shipped, incl. a huge transitive dep | Exclude `node_modules/**` in `.vscodeignore` when `out/` needs no external runtime packages (see below) |
+| Files missing in VSIX                                            | Over-aggressive ignore                              | Use `npx @vscode/vsce ls` to check                                                                      |
+| Listing icon missing                                             | Missing PNG or incorrect manifest path              | Check the top-level icon and packaged PNG                                                               |
+| Activity Bar entry missing                                       | Missing container, SVG or hidden/relocated view     | Check viewsContainers.activitybar, views[containerId], packaged SVG and saved view placement            |
+| `End of central directory record signature not found` on install | Truncated / corrupt VSIX (build interrupted)        | Re-run `vsce package`; verify with `code --install-extension <vsix> --force` before publish             |
+
+### Inspect VSIX Contents
+
+Use `npx @vscode/vsce ls` for the pre-package view and open the built VSIX as a ZIP to list every entry. Whether `node_modules/**` can be excluded, the ZIP enumeration snippet and the size-regression check are owned by [Publishing](publishing.md#judging-node_modules-exclusion). Block the build if temp runner scripts (`_*.ps1`), logs, or stray `*.vsix` leaked in.
+
+## Publishing Errors
+
+See [Publishing → Common Errors](publishing.md#common-errors).
+
+## Runtime Errors
+
+| Symptom                                 | Cause                   | Solution                                                              |
+| --------------------------------------- | ----------------------- | --------------------------------------------------------------------- |
+| "Cannot find module"                    | Dependency not bundled  | Add to dependencies (not devDependencies) or bundle                   |
+| API undefined                           | Wrong VS Code version   | Check `engines.vscode` matches API used                               |
+| Permission denied                       | Restricted API          | Check extension permissions/capabilities                              |
+| `CancellationToken.None` does not exist | Assumed from other SDKs | Create and dispose a `CancellationTokenSource`, then pass its `token` |
+
+### Persistent State Across Windows
+
+When an extension mirrors state between a file and `globalState`, treat persistence as one invariant rather than separate patches:
+
+- replace file snapshots atomically with same-directory temporary write/sync/rename;
+- write payload before revision metadata and serialize foreground saves with mirrors per destination;
+- use a proven heartbeat/stale-aware cross-process lock, then re-read revision inside the lock before writing;
+- on revision conflict, reload the winning snapshot and ask the user to retry instead of merging deletes heuristically;
+- do not timeout an uncancellable `globalState.update()` and release the lock while that write can still land later.
+
+Test empty/corrupt/meta-less snapshots, valid revision-backed empty deletes, mirror failure ordering, stale-window conflicts, lock recovery, and failed atomic replacement preserving the previous target.
+
+### Check VS Code API Version
+
+```json
+// package.json - specify minimum VS Code version
+"engines": {
+  "vscode": "^1.80.0"
+}
+```
+
+Do not assume the installed editor version exists as an `@types/vscode` package. Stable/preview editor builds can be ahead of the npm type release and `npm install` then fails with `ETARGET`. Check `npm view @types/vscode version`, use the newest published types that contain the APIs you need, and set `engines.vscode` to the **lowest supported API version**, not automatically to the developer's current editor version.
+
+## Debug Tips
+
+- Keep runtime diagnostics behind a small Output Channel logger wrapper so tests can assert the logging route and production code does not accumulate stray `console.log` calls.
+- Activation errors also appear in the **Output** panel → **Extension Host** channel and in **Help** → **Toggle Developer Tools** → **Console**.
+- **Developer: Reload Window** reloads without restarting VS Code.
+
+## Driving Copilot Chat From an Extension
+
+Extensions that launch chat via the internal `workbench.action.chat.open` command (passing `mode`, `modelSelector`, or a settings-based reasoning effort) hit a recurring confusion: **writing the setting correctly is not the same as the host honoring it.**
+
+- Separate discovery, persistence, host-local preferences and the provider's actual request. A file write, watcher event, catalog refresh or resolved Chat command does not prove the selected options reached inference.
+- When model objects omit configuration, inspect the host's model schema (for example `vscode://schemas/language-models`). Match exact vendor/opaque ID, preserve enum types/labels and resolve only bounded local references; reject malformed, conflicting or secret-marked properties. Keep inferred previews separate from discovered capabilities.
+- Shared-file updates can leave a Chat input's local settings unchanged. Inspect the owning host implementation and use a harmless synthetic provider to compare received options against deliberately different shared defaults. Prefer verified per-request options or an immutable forwarding binding; do not copy credentials, modify installed providers or bypass source-model consent.
+- Bind source identity, pinned version, capabilities, input budget and selected values immutably; re-query and validate the returned source before every downstream call. Unpinned version is not a pin. Preserve tools, message parts, streaming and cancellation; do not silently discard unsupported parts.
+- Internal schemas/arguments are version-sensitive adapters, not stable API promises. Gate compatibility and report the verified boundary. Explicit model/agent/options must not be dropped for fallback or retried after uncertain delivery; failure stops instead of sending a different request.
+
+### Discovering `.agent.md` Custom Agents
+
+If your extension lists custom agents in a picker, exclude agents whose frontmatter sets `user-invocable: false` — those cannot be directly invoked and only confuse users when shown. A surprising "agent can't be selected" report is usually this flag, not a model or API limitation.
+
+- Cache agent discovery and invalidate it from a file watcher on `**/*.agent.md` (and `**/AGENTS.md`); raise any scan cap well above a handful of files, and warm the cache on activation so the first picker open is not empty.
+
+## Quick Fixes Summary
+
+```bash
+# Clean rebuild
+rm -rf out/ node_modules/
+npm install
+npm run compile
+
+# Reset installed extension
+code --uninstall-extension publisher.extension-id
+npx @vscode/vsce package
+code --install-extension ./extension-1.0.0.vsix
+
+# Check what's in your VSIX
+npx @vscode/vsce ls
+```
+
+## Webview 真っ白 / SyntaxError
+
+| 症状                               | 原因                                 | 解決策                                        |
+| ---------------------------------- | ------------------------------------ | --------------------------------------------- |
+| 画面真っ白                         | JavaScript SyntaxError               | Webview DevTools Console でエラー確認         |
+| `Invalid regular expression: /^*/` | 正規表現のバックスラッシュが消えた   | テンプレート内で二重エスケープ (`\\d`, `\\s`) |
+| `Unexpected token`                 | minify時にクォートが崩れた           | `data-action` + イベント委譲パターンに変更    |
+| ボタンが反応しない                 | inline `onclick` が CSP で拒否される | `document.addEventListener` で委譲            |
+
+詳細と対策は [Webview](webview.md#inline-script-gotchas) を参照。確認は **Developer: Toggle Developer Tools** の Console（active frame を Webview に切り替える）で行い、ビルド出力 `out/extension.js` で該当行を検索する。
+
+## 命名の不一致
+
+| 症状                   | 原因                             | 解決策                                    |
+| ---------------------- | -------------------------------- | ----------------------------------------- |
+| 設定が効かない         | 設定キーがコードと不一致         | package.json と getConfiguration() を統一 |
+| フォルダ単位の値が届かない / 未設定を検出できない | resource スコープの設定を resource なしで読んだ。`get()` は未設定でも manifest の既定値を返す | `getConfiguration(section, workspaceFolderUri)` で読み、ユーザーが設定したかの判定は `inspect()` で行う |
+| コマンドが見つからない | コマンドIDがpackage.jsonと不一致 | 全箇所で同じIDを使用                      |
+
+### 命名一貫性チェック
+
+```bash
+# package.json のコマンド/設定キーを抽出
+grep -E '"myExt\.' package.json
+
+# ソースコードの使用箇所を検索
+grep -r "myExt\." src/
+```
+
+公開前に統一することを強く推奨（公開後は既存ユーザーの設定が壊れる）。

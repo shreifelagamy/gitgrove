@@ -1,0 +1,140 @@
+# Testing VS Code Extensions
+
+Integration tests run in an Extension Development Host. Follow the official [Testing Extensions](https://code.visualstudio.com/api/working-with-extensions/testing-extension) guide for boilerplate; this file keeps the project rules and gotchas.
+
+## Setup
+
+- Default: the test CLI. `npm install -D @vscode/test-cli @vscode/test-electron`, set `"test": "vscode-test"`, and configure `.vscode-test.mjs` (Mocha under the hood; `--label` selects one configuration).
+- Use a custom `runTests` runner from `@vscode/test-electron` only for custom setup (installing a VSIX first, patching a downloaded archive, multiple launch variants).
+- Running tests from the CLI fails if the same VS Code build is already running; run them against a different build/channel or from the debug launch configuration.
+- If `capabilities.untrustedWorkspaces` is declared, run separate trusted/untrusted configurations (trust cannot be toggled from a test); give the untrusted run its own `--user-data-dir`.
+
+## Engine Floor
+
+Treat `engines.vscode` as the supported API/runtime floor, not the developer's
+installed version. Pin `@types/vscode` to that floor; derive test-host and
+isolated-install versions from the validated manifest range rather than separate
+constants. Only strip a caret after validating a simple `^major.minor.patch`
+range; use a range parser for other forms. Keep lockfile and compatibility docs
+aligned. A host rejecting activation on its engine check does not prove an API
+failure: test a proposed lower floor with its types and real Extension Host
+before lowering it. Newer versions inside the declared range need no blanket
+untested-version warning; report actual failures with a manual, data-free Issue
+link instead of uploading diagnostics automatically.
+
+If an optional integration needs a newer host, distinguish its feature minimum
+from the extension's base minimum. Detect/gate the optional API and test the
+unavailable-feature path without breaking existing functionality; disclose both
+requirements rather than silently raising the entire extension floor.
+
+```javascript
+// .vscode-test.mjs
+import { defineConfig } from "@vscode/test-cli";
+import { readFileSync } from "node:fs";
+
+const range = JSON.parse(readFileSync("package.json", "utf8")).engines?.vscode;
+if (typeof range !== "string" || !/^\^\d+\.\d+\.\d+$/.test(range)) {
+  throw new Error("This config requires a simple caret engine range.");
+}
+
+export default defineConfig({
+  files: "out/test/**/*.test.js",
+  version: range.slice(1),
+  mocha: { ui: "tdd", timeout: 20000 },
+});
+```
+
+In a custom runner, pass the same derived value as `runTests({ version })` and set Mocha `failZero: true` so an empty test glob fails.
+
+## Risk-Based Regression Checks
+
+Typecheck explicitly when `compile` only bundles (for example, esbuild); then run the smallest behavior check and the full suite before release.
+
+Extension Host assertions, command resolution, CI success and package identity do not prove that a downstream service produced a user-visible result. For changes to Chat, LM Tools, authentication, model selection or other external integrations, run the affected workflow before release with the same candidate VSIX in disposable `--user-data-dir` and `--extensions-dir` roots. Use disabled/disposable data, verify readback and persisted state, observe the real downstream result (for example, an exact Chat response marker), and remove the profile afterward. Never install over a normal profile that can contain enabled schedules or user data.
+
+If the isolated account does not expose the target model or capability, report that path as unverified and keep a static guard; do not select a hidden model or treat a nearby model's successful smoke as proof for it.
+
+For configurable model integrations, use a synthetic provider to capture exact
+received options and a Low/High/Low round trip to detect cross-request bleed and
+verify immutable binding reuse. Assert one dispatch per explicit request, typed
+numeric/string values, unchanged shared settings, and no credential copies.
+This proves the host/request route, not real-provider network inference or
+proposed-only message support; test those separately with authorized accounts.
+Requested IDs and echoed usage metadata do not prove backend identity; absent
+attributable runtime evidence, report it as unverified.
+
+| Change area                                   | Extra checks                                                                                                                                                                                                                                         |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Commands / settings / views in `package.json` | Verify manifest consistency, command IDs, setting keys, menu `when` clauses, and README setting tables; a setting inserted between existing `order` values shifts the later ones, so update README tables and hardcoded order assertions together                  |
+| Manifest/runtime localization                 | Treat these as separate systems: compare every manifest `package.nls*.json` key set; verify runtime `bundle.l10n.*.json` covers each `vscode.l10n.t` message with identical placeholder sets; confirm both sets ship in the VSIX                     |
+| Runtime logging / diagnostics                 | Verify logs go through an Output Channel logger instead of direct `console.*` calls in extension runtime paths                                                                                                                                       |
+| Resource scanners / providers                 | Test with extension-host APIs available and with missing/empty roots; avoid relying on local filesystem guesses; if you scan installed extensions, cover both known `resources/*` roots and manifest-declared `chatAgents` / `chatPromptFiles` paths |
+| Selectors / quick actions / saved options     | Hide internal, test, deprecated, stale, or unsupported candidates; preserve newly introduced normal candidates; confirm hidden saved values do not reappear from settings, cache, or fallback paths                                                  |
+| Chat / LM Tools / model configuration         | Query the installed tool catalog, create only disabled disposable state, execute one explicit ID, observe the actual response, and confirm selected model/configuration plus disabled-state persistence                                              |
+| Installer / updater / index merge logic       | Run focused regression scripts plus a broader smoke test because these paths often cross manifest, filesystem, and network boundaries                                                                                                                |
+| Generated marker sections                     | Test duplicate marker handling and confirm the final file contains exactly one generated section pair                                                                                                                                                |
+| Worker or secondary module entry points       | Guard that the runtime path (for example `path.join(__dirname, "x.js")`) resolves to a real source file, a compiled output, and an entry in the packaged payload allowlist; packaging can pass while analysis fails only at runtime                  |
+
+Filesystem and realpath behavior can classify the same missing resource differently across developer machines and hosted runners. Assert the user-facing contract first (for example, fallback source/status/payload), and only pin an internal error reason when the test controls the exact failure branch. If multiple reasons are specification-equivalent, use an explicit allowed set instead of one environment-dependent value.
+
+For shared manifest, installer, updater or scanner changes, add a focused regression instead of relying only on manual verification.
+
+## Reliability Gotchas
+
+- Recheck cancellation after every asynchronous preparation step, before downstream calls, and after response/empty-stream/token-count completion. Use deferred or cancelling dependencies: preparation cancellation means zero downstream calls; already-started cancellation means no success result or resend. A source merely receiving the token is not this proof.
+- Treat collaborator selectors as requests, not validation of their returned values. Assert exact returned provider/model and any pinned version before send/count, and verify the registered forwarding model too. Unknown/ambiguous sources fail without alias or default-model fallback.
+- Preserve absent, empty, explicit and invalid/future option maps as distinct states. Retain invalid values per record during load/edit/heal, block their execution, and repair only explicitly; `Object.assign({}, null)` is destructive normalization. Validate before mutating other fields; reselecting identical identity retains options, actual identity changes clear unspecified overrides, full reset clears display metadata too. An unchanged explicit echo is a no-op only when typed map values and model binding match; strip echoed fields from a copy, never mutate caller input or carry the map to a different binding. Test unrelated edits, duplicate/reload, explicit reset and unchanged memory/disk/input after rejection. Seed loaded records for preservation tests rather than creating records forbidden in the current channel.
+- Hiding unsupported settings is not a write guard. Reject new unsupported maps and rebinding before model resolution/persistence in each applicable mutation entry point, while allowing unrelated edits and explicit inheritance. Assert zero resolver/write calls on rejection and pair restricted-channel fixtures with explicit supported-channel fixtures; do not weaken existing-value preservation into a blanket nonempty-map rejection.
+- A provider-advertised numeric zero or sentinel must remain the raw request value without creating a zero-token forwarding model. Test the source input budget separately from the option payload; reject unknown values rather than guessing their meaning.
+- Execute actual Webview submit/source-change handlers, not only source-token assertions. Textareas normalize CRLF to LF; normalize comparisons without inferring a provenance change. Keep file-to-inline conversion explicit, disable hidden required fields, and focus validation errors on visible controls.
+- Test rejected create/update requests with multiple changed fields and invalid paths, including NUL in cached local/global references. Assert that memory, persisted payload and metadata remain unchanged; read-time path rejection does not prove that invalid input cannot be saved.
+- A synchronous storage mock cannot prove queued persistence ordering. Hold the first write with a deferred promise, enqueue the next, and assert it cannot start or read stale state before the first settles. Cover rejected-write recovery, preserved entries and direct versus best-effort error propagation; release and await all pending work before fixture cleanup, without sleeps.
+- A UI automation timeout, a missing busy indicator or a disabled Send button is not proof that a mutating LM Tool did not run. Inspect the Chat transcript and persisted readback before retrying; uncertain delivery can otherwise create duplicates.
+- A static source-pattern check does not prove a command runs. Execute new commands in the Extension Host (empty selection, closed picker), and prove the test can fail by temporarily throwing inside the production function and reverting it. The probe counts only if the mutated bundle really rebuilt (a lint or type error aborts `compile` and the previous bundle keeps running), the fixture reached the guarded path before mutation (an unreachable fixture passes under mutation), and an `A && B || C` rewrite really disables the guard. If the unguarded path ends in a modal prompt the test cannot answer, race the command against a timer and treat a blocked command as the failure.
+- Handlers forwarded through a conditional spread (`...(cond ? { onX } : {})`) escape TypeScript's excess-property check, so an option passed to a request type that lacks the field compiles, never fires, and a test that calls the lower layer directly still passes. Capture the request at the real caller's boundary and assert each handler arrives by identity, including each handler alone; mutate the forwarding once to prove the test fails.
+- A persistent dispatch journal (intent recorded before an irreversible send; an unknown outcome blocks later sends) needs three checks: its files are removed once it is empty, with the empty state written first so a crash never leaves records without their marker; its lock timeout exceeds the longest Host I/O held under the lock, or a finishing run reports a completed turn as unknown; and the in-memory in-flight marker is cleared only after the durable record is updated. Race a finishing run against a queued send waiting in its guard, and prove the test fails with the old order.
+- Commands registered inside `activate()` can be tested without the host: extract the `registerCommand("<id>", handler)` call from the source with the TypeScript AST, transpile it, and run it in `vm` with every referenced global mocked. Load the **real** i18n module per language so assertions compare against production strings, not duplicated copies. Stub a forbidden path (such as a delete-first helper) to throw, and cover the decline, conflict and recovery branches. Then run the real command once in an isolated Extension Host against a local-only fixture to prove the wiring and zero writes.
+- Registered LM Tools can be run in the Extension Host: `vscode.lm.tools` lists them with their `inputSchema`, and `vscode.lm.invokeTool(name, { input, toolInvocationToken: undefined }, token)` invokes one without a chat request. Assert that refusals (unknown enum value, ambiguous or partial name, missing target) leave the workspace unchanged, then run one real mutation on throwaway fixtures (two resources sharing a name: the name alone changes nothing, an ID removes only the chosen one), cleaning up in `finally`. Mutate the selection guard once to prove the test fails.
+- Webview scripts that tests load by extracting named functions into `new Function`: every function the changed code calls must be added to the extraction list and every element it reads stubbed (`null` is fine), or unrelated tests fail with a `ReferenceError`. Keep tiny helpers (such as a diff key) inline in the extracted function, and add a test that drives the new controls through the same harness (submit values, restore a saved value, a missing control keeps the saved value). Check editor HTML with a contract test (ids, `label for`, `aria-describedby`, initial `hidden`, order inside the collapsed section).
+- A new read-time validator must be a fixed point over data you already ship: run it over the bundled catalog and assert output equals input first. Such a test caught a legitimate entry (an empty `path` for a collection) that a stricter draft would have silently dropped. Keep it idempotent so a read and a later write agree, drop only entries that cannot be identified, and apply it on every read path (local cache, bundled file, entries merged from a shared store).
+- Before calling a failing Extension Host test flaky or unrelated, run the same command several times on the unchanged baseline and on the changed tree and compare which tests fail. Time-based tests (fixed races, polling windows, watchers) fail a different test each run under load. If failures disappear after rerunning without an overlapping suite, treat overlap as a hypothesis, not a cause; establish it with controlled serial/parallel runs or evidence of shared profiles, build outputs, caches or locks. One clean full pass on the final tree is the release evidence, and the measured baseline rate justifies recording the rest as a test-timing guard, not a product defect. Retry a bounded number of times; never loop until green. A picker test driven by key commands is the exception to "a different test each run": it fails the same test and drops later keys (the first choice applies, the rest are ignored) under load. Widen the open wait and the key interval, and require several consecutive full host passes; never weaken the assertion.
+- When tests load TypeScript sources through hand-written module loaders or stubs, a new relative import in a source module breaks every test that loads it (`Cannot find module`). Grep for the loader call and update each stub in the same change.
+- For bounded automatic dispatch, test oldest-due selection, reserved daily capacity and slot release on both execution and persistence failures. Keep unclaimed work pending. Name what callback completion proves: a Chat command resolving may confirm dispatch, not completion of the model response; a per-window limiter is not a cross-window guarantee.
+- Do not assume `npm test -- --grep <pattern>` reaches Mocha. Parse supported options before editor download/launch, reject unknown arguments and empty/invalid regex, and forward the unchanged pattern through `extensionTestsEnv`. With no CLI filter, explicitly clear the inherited filter so CI runs the full suite. Verify selected-test counts, zero-match exit failure, and unfiltered execution with an impossible ambient filter. If PowerShell drops options through `npm.ps1`, use `npm.cmd`; for shell-sensitive regex, compile first and invoke the Node runner directly.
+- Make each direct test entry point compile or clean first. An explicit list such as `node --test out/test/a.test.js` can silently pass against stale `out/` while a newly added source test never runs. Give every public test script a matching npm lifecycle hook (for example, `pretest:unit`) and add a guard that every source `*.test.ts` has a compiled path in the test script, or use deterministic discovery.
+- For privacy-sensitive opt-outs around asynchronous file reads, clearing a cache is not enough. Increment a generation on opt-out/disposal, check it after every `await` and before cache/UI writes, close any view showing the disabled data, and use an injected delayed filesystem in tests to prove an in-flight read cannot repopulate state after opt-out.
+- For scanners, test pure merging and the actual registered create/change/delete callbacks: prove cache invalidation, in-flight cancellation and displayed-state updates, including another open item. Frequent writes should update one entry; deletion may use a debounced full scan when sibling files share an ID. Before optimizing selected-item refresh, measure filesystem call counts and guard new/deleted files, sibling formats, cold caches and ordinary full refresh. Synthetic call reductions are not wall-clock speedups; state when other items' cached timestamps refresh.
+- A fixture proves only the shapes you imagined: run a user-home scanner once against the real home and compare counts and duplicates by kind and name. Skip rules for backup or state folders must match directories only (a pattern such as `backup(.*)` also matches `backup.md`) and only directly under the root, so a skill's own `backup/` stays visible. When several roots are listed, a dedupe key built from the relative path must include the root identity, and a package that ships several manifests is one row.
+- Test optional builtins through the real lazy loader, not only an injected replacement. Load the compiled module in an isolated VM with controlled `require`; assert zero loads on import, one load across repeated successful or failed reads, safe failure results, and isolation between module instances. Exercise the default read path too. Avoid production reset APIs or changing global module caches for tests; account for cross-realm prototypes in object comparisons.
+- Async scans need a generation token and a disposed guard so an older completion cannot overwrite newer state or update UI after deactivation. Route fire-and-forget promises through one rejection handler and assert that watcher/timer entry points use it.
+- If behavior depends on `ExtensionContext.storageUri`, run the Extension Host suite both with a folder argument and without one. Empty windows can have different storage roots and otherwise remain an unexecuted branch.
+- `Uri.file()` fixtures cannot reveal the scheme the host really reports. Observed on VS Code 1.147 desktop (Windows, local window): `globalStorageUri` is `vscode-userdata:` with a correct `fsPath`, while `storageUri`, `logUri` and `extensionUri` are `file:`. A `scheme === "file"` gate on global storage rejected every run while all tests passed. Use `fsPath` (check `path.isAbsolute`) unless remoteness is the point, report an unusable store as a not-dispatched failure, and build the regression fixture with the real scheme (`Uri.file(p).with({ scheme: "vscode-userdata" })`) so it fails on the old gate. Probe an unknown host value once in a throwaway instance (`--extensionDevelopmentPath`, disposable `--user-data-dir`/`--extensions-dir`, `--disable-workspace-trust` when an installed extension must activate) that writes the value to a file, then delete the profile. Sweep sibling extensions for the same assumption.
+- A test run cut off midway (output piped into `Select -First N`/`head`, closed pipe, killed terminal) can leave edited settings in the persistent test `user-data`, so the next run fails its default-value assertions. Capture output to a log file and read that. Never share one checkout's `user-data` with another through a directory junction, and reset it to pristine settings before judging a failure.
+- Size Extension Host fixtures by what the assertion discriminates, not by the production limit. Building a multi-megabyte payload inside the host can trip the `Extension host is unresponsive` watchdog even when the suite still passes; shrink the fixture until it is fast and still exercises the branch.
+- On Windows, `@vscode/test-electron` can fail before extension activation while VS Code setup holds the global `vscode-updating` mutex. A downloaded archive is not an Inno Setup installation: use `downloadAndUnzipVSCode`, verify the executable resolves inside the dedicated `.vscode-test` cache, set **only that copy's** `product.json#win32VersionedUpdate` to `false`, re-read it to confirm the value, and pass its `vscodeExecutablePath` to `runTests`. Archive layouts may add a build-hash directory before `resources/app/product.json`; resolve candidate realpaths under the cache root, require exactly one candidate, require a JSON object with a boolean `win32VersionedUpdate`, and never patch the machine installation.
+
+```typescript
+for (const folderArgs of [[extensionDevelopmentPath], []]) {
+  await runTests({
+    extensionDevelopmentPath,
+    extensionTestsPath,
+    launchArgs: [...folderArgs, "--disable-extensions"],
+  });
+}
+```
+
+Treat the archive patch as test infrastructure with static guards: assert cache containment, the single-candidate product lookup, and both workspace/empty-window launches. The main-process log can still print a harmless instance-mutex warning; completion is decided by extension-host assertions and exit code.
+
+A user-level `~/.vscode/argv.json` (for example `enable-proposed-api`) also applies to the test host, so tests asserting "no permission" fail only on a machine where the entry exists. Pin the host version in your runner config when features need a minimum VS Code version, and for a local run remove the entry temporarily, restore the original bytes in `finally`, and verify the file hash afterwards; never leave the edited file behind.
+
+## Terminal Readiness and Owned Cleanup
+
+- Diagnose `terminal.shellIntegration`, its `cwd`, and `terminal.state.shell` separately. Active integration does not guarantee a detected shell type; log only readiness flags and an allowlisted shell label, not commands, output or environment values.
+- If shell detection is absent, do not guess from a profile label, switch shells silently or stretch readiness timeouts to pass a gate. A platform-specific fallback needs bounded read-only observation of the owned terminal's actual process, PID validation and fail-closed handling of errors or ambiguous children; it must not kill processes or bypass execution-time authorization checks.
+- Use isolated local fixtures to assert real start/output/end events, literal argv/stdin, cancellation and unrelated-process survival. Unit mocks or a blocked outcome do not substitute for successful real-shell gates. Retry only after new evidence or a corrective change.
+- Resolve owned Webview tabs from the current `tabGroups` immediately before cleanup rather than retaining stale `Tab` objects across asynchronous UI changes. Limit cleanup to the view opened by the test; never close unrelated user tabs. A webview panel's `TabInputWebview.viewType` was observed on VS Code 1.147 as `mainThreadWebview-<viewType>`; match both forms when finding the tab.
+- Count the test-owned temp folders before and after a full run; any increase fails the gate (a leak of a few folders per run adds up to thousands). Two causes recur: an object that saves in the background after load (migration or repair) recreates a folder the test already removed, so await that save before cleanup; and a document opened in the editor holds its file, so close editors and retry removal in one shared helper. A root-level teardown that re-removes only folders holding nothing but the product's own store files catches stragglers without touching unrelated data. Delete stale leftovers only by that same content rule.
+
+## CI Integration
+
+On Linux runners, wrap the test command with `xvfb-run -a` (for example `xvfb-run -a npm test`) because the Extension Host needs a display.

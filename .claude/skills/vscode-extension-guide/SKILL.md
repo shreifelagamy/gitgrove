@@ -1,0 +1,161 @@
+---
+name: vscode-extension-guide
+description: "Guide for creating VS Code extensions and plugins from scratch through Marketplace publication. Use when developing a VS Code extension/plugin, adding commands or keybindings, building TreeView or Webview UI, publishing to Marketplace, implementing update/reinstall flows that replace user-owned files, or troubleshooting activation and packaging issues."
+argument-hint: "作りたい拡張機能、追加したい機能、困っている点"
+user-invocable: true
+license: CC BY-NC-SA 4.0
+metadata:
+  author: yamapan (https://github.com/aktsmm)
+---
+
+# VS Code Extension Guide
+
+Create, develop, and publish VS Code extensions.
+
+For extensions with a management UI, default to a dedicated Activity Bar icon
+and sidebar unless another entry point is explicitly chosen. A Marketplace
+`icon` alone does not create that navigation; use the TreeView reference below.
+
+For user-facing extensions, provide a clearly labeled bug-report/feature-request
+entry in the primary sidebar or management UI and a Command Palette fallback;
+a README or Marketplace link alone is insufficient. Preview minimal, non-sensitive
+metadata before opening a fixed feedback destination; leave submission to the user
+and never auto-attach prompts, raw logs, secrets or private paths.
+
+## When to Use
+
+- **VS Code extension**, **extension development**, **vscode plugin**
+- Creating a new VS Code extension from scratch
+- Adding commands, keybindings, or settings to an extension
+- Publishing to VS Code Marketplace
+
+## Quick Start
+
+```bash
+# Scaffold new extension (recommended)
+npm install -g yo generator-code
+yo code
+
+# Or minimal manual setup
+mkdir my-extension && cd my-extension
+npm init -y && npm install -D typescript @types/vscode
+```
+
+## Project Structure
+
+```
+my-extension/
+├── package.json          # Extension manifest
+├── src/extension.ts      # Entry point
+├── out/                  # Compiled JS (gitignore)
+├── artifacts/vsix/       # Keep local VSIX archives out of the repo root
+├── images/icon.png       # 128x128 PNG for Marketplace
+└── .vscodeignore         # Exclude files from VSIX
+```
+
+## Building & Packaging
+
+```bash
+npm run compile      # Build once
+npm run watch        # Watch mode (F5 to launch debug)
+mkdir -p artifacts/vsix
+npx @vscode/vsce package --out artifacts/vsix/my-extension-1.0.0.vsix
+```
+
+In PowerShell, replace `mkdir -p artifacts/vsix` with
+`New-Item -ItemType Directory -Force -Path 'artifacts\vsix'`; keep the other
+build/package commands. Choose shell syntax from the execution environment,
+not the agent host.
+
+Keep local `.vsix` archives under `artifacts/vsix/` instead of the repository root, and prune old local builds on a schedule so release artifacts do not pile up. `artifacts/` can already hold tracked files: delete only the VSIX you created, never the directory (check `git ls-files artifacts` first).
+
+## Done Criteria
+
+- [ ] The packaged VSIX installs and activates in an isolated profile; changed user-facing integrations complete their real workflow there
+- [ ] Primary sidebar entry and commands work; referenced icons are present in the VSIX
+- [ ] Package size < 5MB (use `.vscodeignore`)
+- [ ] README links and feedback UI reach the intended support destination; verify the UI-to-form path with synthetic data without submitting
+- [ ] Local VSIX artifacts stored outside the repo root and pruned regularly
+
+## Quick Troubleshooting
+
+| Symptom               | Fix                                                                                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Extension not loading | Check `main`/`engines.vscode`; contributed commands/views activate implicitly (1.74+), add `activationEvents` only for other triggers |
+| Command not found     | Match command ID in package.json/code                                                                                                 |
+| Shortcut not working  | Remove `when` clause, check conflicts                                                                                                 |
+
+## Reference Map
+
+| Topic               | Reference                                                                                                           |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| AI Customization    | [references/ai-customization.md](references/ai-customization.md)                                                    |
+| Code Review Prompts | [references/code-review-prompts.md](references/code-review-prompts.md)                                              |
+| Code Samples        | [references/ai-customization.md](references/ai-customization.md) and [references/webview.md](references/webview.md) |
+| TreeView            | [references/treeview.md](references/treeview.md)                                                                    |
+| Webview             | [references/webview.md](references/webview.md)                                                                      |
+| Testing             | [references/testing.md](references/testing.md)                                                                      |
+| Publishing          | [references/publishing.md](references/publishing.md)                                                                |
+| Troubleshooting     | [references/troubleshooting.md](references/troubleshooting.md)                                                      |
+| Notifications       | [references/notification-normalization.md](references/notification-normalization.md)                                |
+| Safe Replace        | [references/safe-replace.md](references/safe-replace.md)                                                            |
+
+## Best Practices
+
+### Extension Host 境界
+
+- Extension Host 上で動く scanner / provider / TreeView は、同じことができるなら Node 固有の `path` / `Buffer` / 生 `fs` より VS Code API を優先する。Problems と実ビルドの環境差を避けやすい。
+- 自分の拡張に同梱したリソースは、ユーザーのホーム配下や VS Code のインストール先を推測せず、`context.extensionUri` と `vscode.Uri.joinPath` など extension context から解決する。
+- 他の installed extension に同梱されたリソースを読む必要がある場合も、`resources/agents|skills|prompts|instructions|hooks|mcp` の既知 root と、manifest の `chatAgents` / `chatPromptFiles` 宣言を優先して見る。built-in resource とは別の read-only resource として扱い、削除や再インストール導線を混ぜない。
+- Runtime の診断ログは `console.log` に散らさず、Output Channel ベースの logger に集約する。ユーザーがログを開ける導線も command / notification / README のどこかに用意する。
+- 大きい入力の parse や集計を Extension Host スレッドで同期実行しない。上限付きの bytes を `node:worker_threads` へ渡し、cancel / opt-out では `await worker.terminate()` と listener 解除を済ませ、世代 ID が一致する結果だけで cache / UI を更新する。
+- transfer するのは専有した非 `SharedArrayBuffer` だけにし、transfer 後は送信側の view を使わない（同じ backing store の view はすべて detach される）。`Buffer` は pool を共有し得るので、offset 付き view や所有が曖昧な buffer は必要範囲だけを別 buffer へ copy して渡す。
+- worker や別プロセスから受け取った結果をそのまま cache / 表示しない。許可キー検査は `Reflect.ownKeys`、必須キーの存在確認は `Object.hasOwn` で行う（`Object.keys` は非列挙の own property を見逃し、`in` や素の property 参照は継承値を通す）。
+- 例外の `Error.name` や `FileSystemError.code` をそのままログ / UI へ出さない。既知 code の allowlist へ正規化し、未知は単一の汎用 code に落とす。path や token が名前に混ざるケースを防げる。
+- キャッシュや共有ファイル（別拡張が書く index など）から読んだ表示用の値は、使う地点で型を確認し、長さに上限を付ける。非文字列で `replace` 等が例外になる。正規化関数は冪等にし（切り詰めた後に trim する）、先に再現テストを赤にしてから直す。
+- 存在しないかもしれないファイルに対して、先に実パス解決で境界（ルート内か）を判定しない。Windows CI の一時パスは 8.3 短縮名で、存在する側だけ展開され不一致になる。ファイルを開いた後に判定し、ENOENT は「無い」、それ以外の読取失敗は「不明」と分ける。
+
+### Manifest / Docs / Localization
+
+- `package.json` の commands、views、configuration、menus を変えたら、コード上の command ID / setting key と同時に確認する。
+- Marketplace 表示や設定説明をローカライズしている拡張では、`package.nls.json` と対象言語の `package.nls.*.json` を同じ変更で更新する。
+- 実行時の UI 文言（通知・確認ダイアログ・エラー）は、拡張の runtime i18n（`vscode.l10n.t` / `bundle.l10n` か専用の i18n module）に置く。`package.nls*.json` は manifest の `%key%` 専用で、実行時に JSON import しない。`rootDir` 外の JSON import や、テスト loader の `esModuleInterop` が必要になった時点で規約逸脱のサイン。
+- In `markdownDescription`, use native setting references such as `` `#editor.wordWrap#` ``, not `[label](#editor.wordWrap#)`: the latter can leave a trailing hash in the Settings `@id:` filter. Guard each locale's syntax and verify the resolved target.
+- 設定の並び順や説明を変えたら README の設定表、manifest consistency test、release notes の必要有無までまとめて見る。
+- Turning a limit (timeout, cap) into an opt-in or changing its default: add an explicit on/off setting and keep the old behavior for a user who had set the old value (for a machine-scoped setting only `inspect().globalValue` counts; resolve both in one shared function, and give test stub configs an `inspect`). Keep a bound on the part no setting covers (for example before the message is sent) and clear it once the work starts; never pass `undefined` to `setTimeout`, it fires almost at once. Carry which limit fired as a typed field and build the localized message at the UI layer, naming a setting only when it is on. Prove the wiring at the entry point (the request omits the limit when off) with a mutation probe, not only a resolver unit test.
+- Flipping a boolean default (opt-in to opt-out): list every path that normalizes or omits the stored value (create, update, duplicate, load, UI payload) and store the explicit `false`, or past "off" choices cannot be told from "unset". Put the decision in one function used by every runtime check (claims, skips, fingerprints), migrate old unset values once on load (the field's presence is the migrated marker; convert a one-time task to recurring the same way), announce after the save succeeds through one shared, tested helper (marker file under a lock), and state in the notice that earlier "off" choices are unrecoverable. Review the unreleased diff with independent readers: they found the kind-change edge an author-run suite missed.
+
+### Replacing user-owned files
+
+- Update / reinstall / overwrite flows stage and verify the new copy, swap it in with rollback, and keep the backup when rollback fails; never delete first. Content-comparison caps must degrade, not refuse. Steps, scope of the guarantee and tests: [references/safe-replace.md](references/safe-replace.md).
+
+### Language Model Tools
+
+- Treat the tool count as a budget: do not create many tools. Some agent harnesses cap how many tools they expose, and every schema consumes context. Expose one read-only query tool plus one `action`-based mutation tool per feature, reuse the existing handlers behind a thin dispatcher, and remove the old IDs with a migration note (README and CHANGELOG). A saved approval covers the whole merged tool, including delete and run: keep each confirmation in one handler (not both `prepareInvocation` and `invoke`) and make validation errors name the offending field.
+- Extension-provided LM Tools need strong `modelDescription` intent phrases. Prefer `Use when the user asks to ...` plus natural-language verbs for create/update/delete/toggle paths, and add a manifest/doc guard so future wording changes do not silently weaken agent-mode tool selection.
+- For configuration from VS Code Chat, prefer native LM Tools when no external client is required; do not call them an external MCP server. Share validated domain operations with the GUI, expose only necessary actions, and use explicit enable/disable values rather than retry-sensitive toggles.
+- Keep `prepareInvocation` side-effect free and request confirmation for mutations or sensitive disclosure. Revalidate input, cancellation, trust and the queried revision inside the locked write after confirmation. Host approval UI/policies still apply; custom confirmation text is not a bypass. Never accept secret values through tool arguments or silently widen execution permissions.
+- Page query results and omit prompt, environment and raw-output payloads by default. Make sensitive detail retrieval explicit with disclosure confirmation; describe which metadata reaches the model and treat stored strings as data, not instructions.
+- Return typed outcomes from shared operations; a GUI handler that catches errors and returns nothing cannot prove a tool succeeded. Keep committed IDs/success when only presentation fails, return a sanitized warning and tell the caller to query rather than repeat the mutation. Configuration saved is not work executed.
+- Never pick a tool target from a name alone: resolve by exact name plus the IDs its search/list result shows (for example source and path); several matches or only a partial name return the candidates and change nothing. Schema `enum` values are not enforced at runtime, so an unrecognized value must stop the call, not widen the filter. An install refuses an existing destination unless an explicit overwrite flag is passed, then verifies the file at the destination the installer reports.
+- Before publishing an extension with LM Tools, inspect the packaged VSIX rather than trusting source files: confirm `extension/package.json` has the intended version, expected `contributes.languageModelTools` count, and no `src/`, test payloads, or sourcemaps unless intentionally shipped.
+
+### Generated Sections
+
+- `START` / `END` marker で囲む generated section は単一の SSOT として扱う。
+- 重複した marker pair を見つけたら、両方を残して追記せず、内容を統合して marker pair を1つに戻す。
+
+### 命名の一貫性
+
+公開前にパッケージ名・設定キー・コマンド名を統一：
+
+| 項目         | 例                            |
+| ------------ | ----------------------------- |
+| パッケージ名 | `copilot-scheduler`           |
+| 設定キー     | `copilotScheduler.enabled`    |
+| コマンドID   | `copilotScheduler.createTask` |
+| ビューID     | `copilotSchedulerTasks`       |
+
+### 通知の一元管理
+
+通知は共通helperへ集約し、設定値をruntimeで既知enumへ正規化する。重複抑止、ログとの分離、action、security、起動時の繰り返し失敗の一度きり通知の設計は [Notification Normalization](references/notification-normalization.md) を参照する。

@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "skills": {
+    "vscode-ext-commands": {
+      "source": "github/awesome-copilot",
+      "commit": "93fc8b9ee3ef56b9b5e7261e6ce92d314cb2c1cf",
+      "sourceType": "github",
+      "skillPath": "skills/vscode-ext-commands/SKILL.md",
+      "computedHash": "7d8127bdfb5a644469794eb83536da56aeb65a2d83c2640cc40f22d489a70371",
+      "installMode": "copy"
+    },
+    "vscode-ext-localization": {
+      "source": "github/awesome-copilot",
+      "commit": "93fc8b9ee3ef56b9b5e7261e6ce92d314cb2c1cf",
+      "sourceType": "github",
+      "skillPath": "skills/vscode-ext-localization/SKILL.md",
+      "computedHash": "dbfe3fa769af4c05a694ab7e1ee31c0c37042e201b23e67319f2ada831903e0c",
+      "installMode": "copy"
+    },
+    "vscode-extension-expert": {
+      "source": "s-hiraoku/vscode-sidebar-terminal",
+      "commit": "17ccc312430056774c3b790a1ef530436b7be9c8",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/vscode-extension-expert/SKILL.md",
+      "computedHash": "e81447977a10b7adabe450ce51d31fdc9c01c671188312cda5e0854074328f0c",
+      "installMode": "copy"
+    },
+    "vscode-extension-guide": {
+      "source": "aktsmm/Agent-Skills",
+      "commit": "838ef0826fa8515ce015330fc85e49fa0c6f4797",
+      "sourceType": "github",
+      "skillPath": "vscode-extension-guide/SKILL.md",
+      "computedHash": "17c20c1c8567f72521ff958ea939f4852e09def7828c64d83258d98db1bb6ead",
+      "installMode": "copy"
+    }
+  }
+}
